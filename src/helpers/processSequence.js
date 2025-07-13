@@ -3,58 +3,106 @@ import * as R from 'ramda';
 
 const api = new Api();
 
-const isValidNumber = R.allPass([
-  R.pipe(R.length, R.gt(R.__, 2)),
-  R.pipe(R.length, R.lt(R.__, 10)),
-  R.pipe(parseFloat, R.gt(R.__, 0)),
-  R.test(/^[0-9.]+$/),
+const isLengthInRange = R.curry((min, max, str) =>
+  R.both(
+    R.pipe(R.length, R.gt(R.__, min)),
+    R.pipe(R.length, R.lt(R.__, max))
+  )(str)
+);
+
+const isPositiveNumber = R.pipe(
+  parseFloat,
+  R.gt(R.__, 0)
+);
+
+const matchesPattern = R.curry((pattern, str) => pattern.test(str));
+
+const validate = R.allPass([
+  isLengthInRange(2, 10),
+  isPositiveNumber,
+  matchesPattern(/^\d+\.?\d*$/),
+  R.complement(R.pipe(R.toString, R.endsWith('.')))
 ]);
 
-const round = R.pipe(parseFloat, Math.round);
+const roundNumber = R.pipe(
+  parseFloat,
+  Math.round
+);
 
-const toBinary = (number) =>
-  api.get('https://api.tech/numbers/base')({
-    number,
+const logValue = R.curry((writeLog, value) => {
+  writeLog(value);
+  return value;
+});
+
+const toBinary = R.curry((apiInstance, number) =>
+  apiInstance.get('https://api.tech/numbers/base')({
     from: 10,
     to: 2,
-  });
+    number
+  })
+);
 
-const getAnimal = (id) =>
-  api.get(`https://animals.tech/${id}`)();
+const getAnimal = R.curry((apiInstance, id) =>
+  apiInstance.get(`https://animals.tech/${id}`, {})
+);
 
-const processSequence = async ({ value, writeLog, handleSuccess, handleError }) => {
-  const log = R.tap(writeLog);
+const processApiResult = R.prop('result');
 
-  if (!isValidNumber(value)) {
-    return handleError('ValidationError');
-  }
-
-  try {
-    log(value);
-
-    const rounded = round(value);
-    log(rounded);
-
-    const binaryResponse = await toBinary(rounded);
-    const binary = binaryResponse.result;
-    log(binary);
-
-    const length = binary.length;
+const calculateSequence = log => R.pipe(
+  result => {
+    const length = result.length;
     log(length);
 
-    const squared = length ** 2;
+    const squared = length * length;
     log(squared);
 
     const mod = squared % 3;
     log(mod);
 
-    const animalResponse = await getAnimal(mod);
-    const animal = animalResponse.result;
-
-    handleSuccess(animal);
-  } catch (error) {
-    handleError(error.message || error);
+    return mod;
   }
+);
+
+const processSequence = ({ value, writeLog, handleSuccess, handleError }) => {
+  const log = logValue(writeLog);
+
+  log(value); 
+
+  if (!validate(value)) {
+    handleError('ValidationError');
+    return;
+  }
+
+  return R.pipe(
+    roundNumber,
+    log, 
+    toBinary(api),
+    R.andThen(response => {
+      const binary = processApiResult(response);
+      log(binary); 
+      return binary;
+    }),
+    R.andThen(binary => {
+      const length = binary.length;
+      log(length); 
+
+      const squared = length ** 2;
+      log(squared); 
+
+      const mod = squared % 3;
+      log(mod); 
+
+      return mod; 
+    }),
+    R.andThen(id => getAnimal(api, id)), 
+    R.andThen(response => {
+      const animal = processApiResult(response);
+      log(animal); 
+      return animal;
+    }),
+    R.andThen(handleSuccess),
+    R.otherwise(error => handleError(error.message || 'API Error'))
+  )(value);
 };
 
 export default processSequence;
